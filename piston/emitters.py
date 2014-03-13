@@ -26,9 +26,20 @@ from django.utils import simplejson
 from django.utils.xmlutils import SimplerXMLGenerator
 from django.utils.encoding import smart_unicode
 from django.core.urlresolvers import reverse, NoReverseMatch
+from simplejson.encoder import JSONEncoder
 from django.core.serializers.json import DateTimeAwareJSONEncoder
 from django.http import HttpResponse
 from django.core import serializers
+
+import django
+if django.VERSION >= (1, 5):
+    # In 1.5 and later, DateTimeAwareJSONEncoder inherits from json.JSONEncoder,
+    # while in 1.4 and earlier it inherits from simplejson.JSONEncoder.  The two
+    # are not compatible due to keyword argument namedtuple_as_object, and we
+    # have to ensure that the 'dumps' function we use is the right one.
+    import json
+else:
+    from django.utils import simplejson as json
 
 from utils import HttpStatusCode, Mimer
 from validate_jsonp import is_valid_jsonp_callback_value
@@ -101,13 +112,6 @@ class Emitter(object):
             """
             ret = None
 
-            # return anything we've already seen as a string only
-            # this prevents infinite recursion in the case of recursive relationships
-            if thing in self.stack:
-                return None
-
-            self.stack.append(thing)
-
             if isinstance(thing, QuerySet):
                 ret = _qs(thing, fields)
             elif isinstance(thing, (tuple, list, set)):
@@ -131,8 +135,6 @@ class Emitter(object):
                 ret = _any(thing.all())
             else:
                 ret = smart_unicode(thing, strings_only=True)
-
-            self.stack.pop()
 
             return ret
 
@@ -306,7 +308,6 @@ class Emitter(object):
             return dict([ (k, _any(v, fields)) for k, v in data.iteritems() ])
 
         # Kickstart the seralizin'.
-        self.stack = [];
         return _any(self.data, self.fields)
 
     def in_typemapper(self, model, anonymous):
@@ -398,7 +399,7 @@ class JSONEmitter(Emitter):
     """
     def render(self, request):
         cb = request.GET.get('callback', None)
-        seria = simplejson.dumps(self.construct(), cls=DateTimeAwareJSONEncoder, ensure_ascii=False, indent=4)
+        seria = json.dumps(self.construct(), cls=DateTimeAwareJSONEncoder, ensure_ascii=False, indent=4)
 
         # Callback
         if cb and is_valid_jsonp_callback_value(cb):
@@ -407,7 +408,7 @@ class JSONEmitter(Emitter):
         return seria
 
 Emitter.register('json', JSONEmitter, 'application/json; charset=utf-8')
-Mimer.register(simplejson.loads, ('application/json',))
+Mimer.register(json.loads, ('application/json',))
 
 class YAMLEmitter(Emitter):
     """
@@ -419,7 +420,7 @@ class YAMLEmitter(Emitter):
 
 if yaml:  # Only register yaml if it was import successfully.
     Emitter.register('yaml', YAMLEmitter, 'application/x-yaml; charset=utf-8')
-    Mimer.register(lambda s: dict(yaml.load(s)), ('application/x-yaml',))
+    Mimer.register(lambda s: dict(yaml.safe_load(s)), ('application/x-yaml',))
 
 class PickleEmitter(Emitter):
     """
